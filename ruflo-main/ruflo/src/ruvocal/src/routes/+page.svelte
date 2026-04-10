@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from "$app/navigation";
 	import { base } from "$app/paths";
 	import { usePublicConfig } from "$lib/utils/PublicConfig.svelte";
 
@@ -99,6 +100,47 @@
 	);
 
 	const tabs = ["Overview", "Agents", "Workflows", "Runs", "Logs", "Analytics", "Settings"];
+	let activeTab = $state("Overview");
+	let searchTerm = $state("");
+
+	const tokenize = (value: string): string[] =>
+		value
+			.toLowerCase()
+			.split(/[^a-z0-9]+/)
+			.filter(Boolean);
+	const matchesQuery = (parts: Array<string | number | undefined>, query: string): boolean => {
+		const tokens = tokenize(query);
+		if (!tokens.length) return true;
+		const haystack = tokenize(parts.filter(Boolean).join(" "));
+		return tokens.every((token) => haystack.some((part) => part.includes(token)));
+	};
+
+	const launchRoute = async () => {
+		await goto(`${base}/?prompt=${encodeURIComponent("Coordinate a new multi-agent workflow run")}`);
+	};
+
+	const inspectPrimaryRun = async () => {
+		if (sortedConversations[0]?.id) {
+			await goto(`${base}/conversation/${sortedConversations[0].id}`);
+			return;
+		}
+		await goto(`${base}/models`);
+	};
+
+	const openSystemPolicy = async () => {
+		activeTab = "Settings";
+		await goto(`${base}/settings/application`);
+	};
+
+	const openRun = async (runId: string) => {
+		if (!runId) return;
+		await goto(`${base}/conversation/${runId}`);
+	};
+
+	const setTab = (tab: string) => {
+		activeTab = tab;
+	};
+
 	let metrics = $derived([
 		[
 			"Agents online",
@@ -296,6 +338,25 @@
 		["Coverage", clamp(70 + Math.round(completedRuns * 2.5), 38, 96)],
 	]);
 
+	let filteredAgents = $derived(
+		agents.filter(([name, role, status]) => matchesQuery([name, role, status], searchTerm))
+	);
+	let filteredFeed = $derived(
+		feed.filter(([time, kind, title, description]) =>
+			matchesQuery([time, kind, title, description], searchTerm)
+		)
+	);
+	let filteredRuns = $derived(
+		runs.filter(([run, stage, status, latency, cost, note]) =>
+			matchesQuery([run, stage, status, latency, cost, note], searchTerm)
+		)
+	);
+	let filteredOversight = $derived(
+		oversight.filter(([task, owner, impact, level]) =>
+			matchesQuery([task, owner, impact, level], searchTerm)
+		)
+	);
+
 	const tokens = [
 		["Deep background", "#050816"],
 		["Panel glass", "#0c1326"],
@@ -346,21 +407,27 @@
 						<div class="mt-2 text-sm text-slate-400">Command context - premium neutral theme</div>
 					</div>
 					<div class="flex flex-wrap gap-3">
-						<button type="button" class="btn-primary">Launch run</button>
-						<button type="button" class="btn-secondary">Inspect outputs</button>
-						<a href={`${base}/settings/application`} class="btn-ghost">System policy</a>
+						<button type="button" class="btn-primary" onclick={launchRoute}>Launch run</button>
+						<button type="button" class="btn-secondary" onclick={inspectPrimaryRun}>Inspect outputs</button>
+						<button type="button" class="btn-ghost" onclick={openSystemPolicy}>System policy</button>
 					</div>
 				</div>
 			</div>
 
 			<div class="mt-6 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
 				<div class="soft-panel flex min-h-12 items-center justify-between rounded-[18px] px-4 text-sm text-slate-400 xl:min-w-[360px]">
-					<span>Search agents, workflows, logs</span>
+					<input
+						type="search"
+						bind:value={searchTerm}
+						placeholder="Search agents, workflows, logs"
+						aria-label="Search mission control data"
+						class="w-full bg-transparent text-sm text-slate-200 outline-none placeholder:text-slate-500"
+					/>
 					<kbd class="rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 font-mono text-xs text-slate-200">Ctrl K</kbd>
 				</div>
 				<div class="flex flex-wrap gap-2">
 					{#each tabs as tab, index}
-						<button type="button" class={`tab ${index === 0 ? "tab-active" : ""}`}>{tab}</button>
+						<button type="button" class={`tab ${activeTab === tab || (!searchTerm && index === 0 && activeTab === "Overview") ? "tab-active" : ""}`} onclick={() => setTab(tab)}>{tab}</button>
 					{/each}
 				</div>
 			</div>
@@ -376,7 +443,7 @@
 			</div>
 		{/if}
 
-		<section class="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_420px]">
+		<section class={`grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_420px] ${activeTab !== "Overview" && activeTab !== "Workflows" ? "hidden" : ""}`}>
 			<div class="grid gap-6">
 				<div class="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
 					{#each metrics as [label, value, delta, footnote, tone]}
@@ -463,7 +530,7 @@
 						<div class="pill pill-rose">3 pending</div>
 					</div>
 					<div class="space-y-3">
-						{#each oversight as [task, owner, impact, level]}
+						{#each filteredOversight as [task, owner, impact, level]}
 							<div class="soft-panel rounded-[22px] p-4">
 								<div class="flex items-start justify-between gap-3">
 									<div>
@@ -492,7 +559,7 @@
 						<div class="pill pill-cyan">Streaming</div>
 					</div>
 					<div class="space-y-3">
-						{#each feed as [time, kind, title, description]}
+						{#each filteredFeed as [time, kind, title, description]}
 							<div class="soft-panel grid gap-3 rounded-[22px] p-4 md:grid-cols-[80px_minmax(0,1fr)]">
 								<div class="font-mono text-xs uppercase tracking-[0.22em] text-slate-400">{time}</div>
 								<div>
@@ -509,7 +576,7 @@
 			</div>
 		</section>
 
-		<section class="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+		<section class={`grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)] ${activeTab !== "Overview" && activeTab !== "Agents" && activeTab !== "Analytics" ? "hidden" : ""}`}>
 			<article class="glass rounded-[28px] p-5 md:p-6">
 				<div class="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
 					<div>
@@ -523,7 +590,7 @@
 					</div>
 				</div>
 				<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-					{#each agents as [name, role, status, load, latency, tokensUsed]}
+					{#each filteredAgents as [name, role, status, load, latency, tokensUsed]}
 						<div class="soft-panel rounded-[22px] p-4">
 							<div class="flex items-start justify-between gap-3">
 								<div>
@@ -581,7 +648,7 @@
 			</article>
 		</section>
 
-		<section class="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)]">
+		<section class={`grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(320px,0.75fr)] ${activeTab !== "Overview" && activeTab !== "Runs" && activeTab !== "Logs" && activeTab !== "Settings" ? "hidden" : ""}`}>
 			<article class="glass rounded-[28px] p-5 md:p-6">
 				<div class="mb-5">
 					<div class="text-xs uppercase tracking-[0.24em] text-slate-400">Runs</div>
@@ -597,8 +664,8 @@
 							</tr>
 						</thead>
 						<tbody>
-							{#each runs as [run, stage, status, latency, cost, note]}
-								<tr class="border-b border-white/5 last:border-b-0">
+							{#each filteredRuns as [run, stage, status, latency, cost, note], index}
+								<tr class="border-b border-white/5 last:border-b-0 cursor-pointer transition-colors hover:bg-white/5" onclick={() => openRun((sortedConversations[index]?.id) || "")}>
 									<td class="px-4 py-4 font-display uppercase tracking-[0.1em]">{run}</td>
 									<td class="px-4 py-4">{stage}</td>
 									<td class="px-4 py-4"><span class={`pill ${badge(status)}`}>{status}</span></td>
@@ -630,9 +697,9 @@
 								<span>risk: low</span><span>confidence: 0.92</span><span>impact: release safety</span>
 							</div>
 							<div class="mt-4 flex flex-wrap gap-2">
-								<button type="button" class="btn-primary btn-small">Approve rerun</button>
-								<button type="button" class="btn-secondary btn-small">Assign</button>
-								<button type="button" class="btn-ghost btn-small">Reject</button>
+								<button type="button" class="btn-primary btn-small" onclick={inspectPrimaryRun}>Approve rerun</button>
+								<button type="button" class="btn-secondary btn-small" onclick={launchRoute}>Assign</button>
+								<button type="button" class="btn-ghost btn-small" onclick={() => setTab("Logs")}>Reject</button>
 							</div>
 						</div>
 					</div>
