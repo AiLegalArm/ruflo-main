@@ -21,6 +21,12 @@ import type { Semaphore } from "$lib/types/Semaphore";
 import type { AssistantStats } from "$lib/types/AssistantStats";
 import type { TokenCache } from "$lib/types/TokenCache";
 import type { ConfigKey } from "$lib/types/ConfigKey";
+import type {
+	PlatformAgent,
+	PlatformEvent,
+	PlatformRun,
+	PlatformWorkflow,
+} from "$lib/types/Platform";
 
 import { building } from "$app/environment";
 import { onExit } from "./exitHandler";
@@ -99,6 +105,10 @@ export class Database {
 		const conversationStats = new RvfCollection<ConversationStats>(CONVERSATION_STATS_COLLECTION);
 		const reports = new RvfCollection<Report>("reports");
 		const tools = new RvfCollection<Record<string, unknown>>("tools");
+		const platformAgents = new RvfCollection<PlatformAgent>("platformAgents");
+		const platformWorkflows = new RvfCollection<PlatformWorkflow>("platformWorkflows");
+		const platformRuns = new RvfCollection<PlatformRun>("platformRuns");
+		const platformEvents = new RvfCollection<PlatformEvent>("platformEvents");
 		const bucket = new RvfGridFSBucket();
 
 		return {
@@ -109,6 +119,10 @@ export class Database {
 			reports,
 			sharedConversations,
 			abortedGenerations,
+			platformAgents,
+			platformWorkflows,
+			platformRuns,
+			platformEvents,
 			settings,
 			users,
 			sessions,
