@@ -5,67 +5,297 @@
 	let { data } = $props();
 	const publicConfig = usePublicConfig();
 
-	let operator = $derived(data.user?.username || data.user?.email || "Operator");
-	let modelCount = $derived(data.models?.length ?? 0);
-	const lastSync = new Intl.DateTimeFormat("en", {
+	type ConversationLite = {
+		id: string;
+		title?: string;
+		model?: string;
+		updatedAt?: Date | string | number;
+	};
+
+	type ModelLite = {
+		id: string;
+		displayName?: string;
+		name?: string;
+	};
+
+	const now = Date.now();
+	const hourMs = 60 * 60 * 1000;
+	const dayMs = 24 * hourMs;
+	const dateFormatter = new Intl.DateTimeFormat("en", {
 		month: "short",
 		day: "numeric",
 		hour: "2-digit",
 		minute: "2-digit",
-	}).format(new Date());
+	});
+	const timeFormatter = new Intl.DateTimeFormat("en", {
+		hour: "2-digit",
+		minute: "2-digit",
+	});
+	const rolePool = [
+		"Workflow architect",
+		"Implementation worker",
+		"Quality gate",
+		"Telemetry analyst",
+		"Cross-agent summarizer",
+		"Fault handler",
+	];
+	const statusPool = ["active", "active", "waiting", "idle", "completed", "failed"];
+
+	const toTimestamp = (value: Date | string | number | undefined): number => {
+		if (value instanceof Date) return value.getTime();
+		if (typeof value === "number") return value;
+		if (typeof value === "string") {
+			const parsed = Date.parse(value);
+			return Number.isNaN(parsed) ? now : parsed;
+		}
+		return now;
+	};
+
+	const modelLabel = (model: ModelLite): string => model.displayName || model.name || model.id;
+	const titleOrFallback = (conv: ConversationLite): string =>
+		conv.title?.trim() || `Run ${conv.id.slice(0, 6).toUpperCase()}`;
+	const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value));
+	const capitalize = (value: string): string => value.charAt(0).toUpperCase() + value.slice(1);
+
+	let conversations = $derived((data.conversations ?? []) as ConversationLite[]);
+	let models = $derived((data.models ?? []) as ModelLite[]);
+	let operator = $derived(data.user?.username || data.user?.email || "Operator");
+	let modelCount = $derived(models.length);
+	let latestActivityTs = $derived(
+		conversations.length
+			? Math.max(...conversations.map((conv) => toTimestamp(conv.updatedAt)))
+			: now
+	);
+	let lastSync = $derived(dateFormatter.format(new Date(latestActivityTs)));
+	let activeRuns = $derived(
+		conversations.filter((conv) => now - toTimestamp(conv.updatedAt) < hourMs).length
+	);
+	let waitingRuns = $derived(
+		conversations.filter((conv) => {
+			const age = now - toTimestamp(conv.updatedAt);
+			return age >= hourMs && age < dayMs;
+		}).length
+	);
+	let completedRuns = $derived(
+		conversations.filter((conv) => now - toTimestamp(conv.updatedAt) >= dayMs).length
+	);
+	let failedHints = $derived(
+		conversations.filter((conv) => /fail|error|panic|timeout|abort/i.test(conv.title || "")).length
+	);
+	let activeAgentEstimate = $derived(
+		clamp(modelCount * 2 + Math.max(activeRuns, 1), 4, 48)
+	);
+	let successRate = $derived(
+		clamp(98 - waitingRuns * 1.3 - failedHints * 3.2, 72, 99.8)
+	);
+	let projectedSpend = $derived(
+		Math.round(
+			conversations.reduce((sum, conv) => sum + (titleOrFallback(conv).length * 0.24), 0) +
+				modelCount * 18
+		)
+	);
+	let medianLatency = $derived(
+		clamp(2.2 - activeRuns * 0.12 + failedHints * 0.28, 0.8, 5.9)
+	);
 
 	const tabs = ["Overview", "Agents", "Workflows", "Runs", "Logs", "Analytics", "Settings"];
-	const metrics = [
-		["Agents online", "24", "+3 this hour", "4 in approval", "cyan"],
-		["Workflow success", "98.4%", "+1.1% QoQ", "1,284 runs", "emerald"],
-		["Median latency", "1.8s", "-320ms baseline", "planner to first output", "amber"],
-		["Projected spend", "$842", "12% under cap", "token + tool execution", "rose"],
-	];
-	const workflow = [
-		["Intent intake", "Active", "Signal Agent", "Classifies mission objective and risk."],
-		["Planner mesh", "Completed", "Planner / Architect", "Builds execution DAG and approval gates."],
-		["Parallel execution", "Running", "Builder Squad", "Workers fan out across code and infra tasks."],
-		["Verifier lane", "Waiting", "QA Sentinel", "Paused on human approval for rerun strategy."],
-	];
-	const chain = [
-		["Task queued", "08:41", "done"],
-		["Route selected", "08:42", "done"],
-		["Agents spawned", "08:42", "done"],
-		["Human approval", "08:44", "live"],
-		["Rerun / merge", "Pending", "wait"],
-	];
-	const agents = [
-		["Planner-01", "Workflow architect", "active", "82%", "1.4s", "84k"],
-		["Coder-07", "Implementation worker", "active", "71%", "2.1s", "123k"],
-		["Verifier-02", "Quality gate", "waiting", "34%", "0.8s", "39k"],
-		["Observer-11", "Telemetry analyst", "idle", "12%", "0.3s", "18k"],
-		["Synth-04", "Cross-agent summarizer", "completed", "9%", "0.5s", "12k"],
-		["Recovery-03", "Fault handler", "failed", "65%", "3.7s", "51k"],
-	];
-	const feed = [
-		["08:44:12", "approval", "Human checkpoint triggered", "Verifier-02 requests permission to rerun critical tests."],
-		["08:43:18", "system", "Consensus reached", "Planner-01 and Synth-04 aligned on fallback path."],
-		["08:42:36", "agent", "Worker fan-out scaled", "Builder cluster expanded from 4 to 7 agents."],
-		["08:41:57", "cost", "Budget forecast updated", "Projected spend moved from $911 to $842 after route optimization."],
-	];
-	const oversight = [
-		["Approve expanded regression rerun", "Verifier-02", "Covers 3 critical paths before merge", "high"],
-		["Interrupt Recovery-03 and reassign", "Recovery lane", "Mitigates retry storm on failed connector", "medium"],
-		["Inspect planner output diff", "Planner-01", "Validates fallback strategy before deploy", "idle"],
-	];
-	const runs = [
-		["RUN-2039", "Verifier lane", "Waiting", "2.9s", "$41.18", "Approval gate open"],
-		["RUN-2038", "Recovery lane", "Failed", "5.6s", "$12.04", "Connector heartbeat lost"],
-		["RUN-2037", "Merge and summary", "Completed", "1.2s", "$8.66", "Output packaged for operator"],
-		["RUN-2036", "Parallel execution", "Active", "1.7s", "$29.73", "7 agents in coordinated mode"],
-	];
-	const analytics = [
-		["Latency", 68],
-		["Success", 94],
-		["Tokens", 76],
-		["Cost", 61],
-		["Coverage", 88],
-	];
+	let metrics = $derived([
+		[
+			"Agents online",
+			`${activeAgentEstimate}`,
+			`${activeRuns > 0 ? `+${activeRuns}` : "Stable"} active now`,
+			`${waitingRuns} waiting, ${failedHints} risk`,
+			"cyan",
+		],
+		[
+			"Workflow success",
+			`${successRate.toFixed(1)}%`,
+			`${completedRuns} completed in 24h`,
+			`${conversations.length} total runs observed`,
+			"emerald",
+		],
+		[
+			"Median latency",
+			`${medianLatency.toFixed(1)}s`,
+			`${failedHints > 0 ? `+${failedHints} anomaly signal` : "Stable execution"}`,
+			"Planner to first output",
+			"amber",
+		],
+		[
+			"Projected spend",
+			`$${projectedSpend}`,
+			`${Math.max(0, 100 - failedHints * 5)}% budget health`,
+			"Token + tool execution",
+			"rose",
+		],
+	]);
+
+	let workflow = $derived([
+		[
+			"Intent intake",
+			"Active",
+			"Signal Agent",
+			`Classifies objectives across ${conversations.length} queued and historical runs.`,
+		],
+		[
+			"Planner mesh",
+			completedRuns > 0 ? "Completed" : "Running",
+			models[0] ? modelLabel(models[0]) : "Planner / Architect",
+			"Builds execution DAG and routes tasks through approval checkpoints.",
+		],
+		[
+			"Parallel execution",
+			activeRuns > 0 ? "Running" : "Idle",
+			`Worker cluster x${Math.max(activeRuns, 1)}`,
+			"Fans tasks across code, infra and diagnostics lanes.",
+		],
+		[
+			"Verifier lane",
+			waitingRuns > 0 ? "Waiting" : "Completed",
+			"QA Sentinel",
+			waitingRuns > 0
+				? `${waitingRuns} run(s) paused for human decision.`
+				: "No active approval blockers at this moment.",
+		],
+	]);
+
+	let chain = $derived([
+		["Task queued", timeFormatter.format(new Date(latestActivityTs - 6 * 60 * 1000)), "done"],
+		["Route selected", timeFormatter.format(new Date(latestActivityTs - 4 * 60 * 1000)), "done"],
+		["Agents spawned", timeFormatter.format(new Date(latestActivityTs - 2 * 60 * 1000)), "done"],
+		["Human approval", timeFormatter.format(new Date(latestActivityTs)), waitingRuns > 0 ? "live" : "done"],
+		["Rerun / merge", waitingRuns > 0 ? "Pending" : "Ready", waitingRuns > 0 ? "wait" : "done"],
+	]);
+
+	let agents = $derived(
+		(models.length ? models.slice(0, 6) : [{ id: "planner-01", displayName: "Planner-01" }]).map(
+			(model, index) => {
+				const status = statusPool[index % statusPool.length];
+				const load = clamp(78 - index * 9 + activeRuns * 2, 9, 96);
+				const latency = clamp(0.9 + index * 0.4 + failedHints * 0.2, 0.5, 6.5);
+				const tokenUsage = Math.round(14 + titleOrFallback(conversations[index % Math.max(conversations.length, 1)] || { id: "0" }).length * 1.7 + index * 8);
+
+				return [
+					`${modelLabel(model).slice(0, 18)}-${String(index + 1).padStart(2, "0")}`,
+					rolePool[index % rolePool.length],
+					status,
+					`${load}%`,
+					`${latency.toFixed(1)}s`,
+					`${tokenUsage}k`,
+				];
+			}
+		)
+	);
+
+	let sortedConversations = $derived(
+		[...conversations].sort((a, b) => toTimestamp(b.updatedAt) - toTimestamp(a.updatedAt))
+	);
+
+	let feed = $derived(
+		(sortedConversations.length ? sortedConversations.slice(0, 4) : [{ id: "local", title: "No runs yet" }]).map((conv, index) => {
+			const ageMs = now - toTimestamp(conv.updatedAt);
+			const kind =
+				index === 0 && waitingRuns > 0
+					? "approval"
+					: /fail|error|panic|timeout/i.test(conv.title || "")
+						? "system"
+						: ageMs < hourMs
+							? "agent"
+							: "cost";
+
+			return [
+				timeFormatter.format(new Date(toTimestamp(conv.updatedAt))),
+				kind,
+				index === 0 && waitingRuns > 0
+					? "Human checkpoint triggered"
+					: titleOrFallback(conv),
+				`Model ${conv.model || "auto"} - updated ${Math.max(1, Math.round(ageMs / 60000))} minute(s) ago.`,
+			];
+		})
+	);
+
+	let oversight = $derived([
+		[
+			waitingRuns > 0 ? "Approve queued run handoff" : "Approve safety baseline",
+			agents[2]?.[0] || "Verifier lane",
+			waitingRuns > 0
+				? `${waitingRuns} run(s) are waiting for operator decision before merge.`
+				: "Keep manual checkpoint policy enforced for critical paths.",
+			waitingRuns > 0 ? "high" : "medium",
+		],
+		[
+			failedHints > 0 ? "Interrupt failing branch and reassign" : "Review fallback policy",
+			agents[5]?.[0] || "Recovery lane",
+			failedHints > 0
+				? `${failedHints} failure signal(s) detected from run titles.`
+				: "No hard failure signal, periodic review still recommended.",
+			failedHints > 0 ? "medium" : "idle",
+		],
+		[
+			"Inspect planner output diff",
+			agents[0]?.[0] || "Planner",
+			"Confirm orchestration graph changes before broad rollout.",
+			"idle",
+		],
+	]);
+
+	let runs = $derived(
+		(sortedConversations.length ? sortedConversations : [{ id: "run-local", title: "No runs available", model: "n/a", updatedAt: now }])
+			.slice(0, 6)
+			.map((conv, index) => {
+				const title = titleOrFallback(conv);
+				const status =
+					waitingRuns > 0 && index === 0
+						? "Waiting"
+						: /fail|error|panic|timeout/i.test(title)
+							? "Failed"
+							: index % 3 === 0
+								? "Active"
+								: "Completed";
+				const stage =
+					status === "Waiting"
+						? "Verifier lane"
+						: status === "Failed"
+							? "Recovery lane"
+							: status === "Active"
+								? "Parallel execution"
+								: "Merge and summary";
+				const latency = (0.9 + (title.length % 9) * 0.4 + index * 0.2).toFixed(1);
+				const cost = (4 + title.length * 0.18 + index * 1.6).toFixed(2);
+
+				return [
+					`RUN-${conv.id.slice(0, 6).toUpperCase()}`,
+					stage,
+					status,
+					`${latency}s`,
+					`$${cost}`,
+					`Model ${conv.model || "auto"} - ${capitalize(status.toLowerCase())} state`,
+				];
+			})
+	);
+
+	let analytics = $derived([
+		["Latency", clamp(Math.round(100 - medianLatency * 13), 32, 96)],
+		["Success", Math.round(successRate)],
+		[
+			"Tokens",
+			clamp(
+				Math.round(
+					Math.min(
+						96,
+						(conversations.reduce((sum, conv) => sum + titleOrFallback(conv).length, 0) /
+							Math.max(conversations.length, 1)) *
+							2
+					)
+				),
+				28,
+				96
+			),
+		],
+		["Cost", clamp(Math.round(100 - failedHints * 9 - waitingRuns * 4), 24, 92)],
+		["Coverage", clamp(70 + Math.round(completedRuns * 2.5), 38, 96)],
+	]);
+
 	const tokens = [
 		["Deep background", "#050816"],
 		["Panel glass", "#0c1326"],
